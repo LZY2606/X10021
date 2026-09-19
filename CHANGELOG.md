@@ -4,6 +4,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- New `FramePolicy` for `ByteReader` together with `ByteReader::with_policy()`,
+  `ByteReader::policy()`, `ByteReader::set_policy()` and `ByteReader::into_inner()`.
+  The policy decides which frames are projected into the byte stream:
+  `FramePolicy::Binary` (only `Binary` payloads), `FramePolicy::TextAndBinary`
+  (the default, `Text` + `Binary` payloads) and `FramePolicy::All` (additionally
+  the payloads of `Ping`/`Pong` control frames). `ByteReader::new()` keeps its
+  signature and now uses the explicit default policy.
+
+### Fixed
+- `ByteReader` no longer leaks `Ping`/`Pong` payloads into the byte stream under
+  the default policy, and a `Close` frame now terminates the byte stream with a
+  stable EOF: once EOF was returned, every further read on both the futures-io
+  and the tokio entry point returns EOF again without polling the underlying
+  stream any further. Previously control frames were flattened into payload
+  bytes and reads after a `Close` frame depended on whatever the underlying
+  stream happened to produce next.
+- Messages with an empty payload no longer surface as a spurious 0-byte read
+  (which is indistinguishable from EOF); they are skipped instead.
+- Reading with a 0-length buffer no longer consumes a message (and no longer
+  panics when a partially read message was still buffered); it returns 0 bytes
+  immediately without touching the stream.
+
+### Implementation notes
+- The policy is applied per message inside the read loop (`FramePolicy::project`
+  in `src/bytes.rs`), before any chunking happens. Skipped frames are consumed
+  in the same poll, so backpressure and waker registration are unchanged:
+  `Poll::Pending` from the underlying stream is still propagated immediately
+  and each skipped frame is real progress, never a spin.
+- Chunking of large messages is untouched: a partially read message is drained
+  from the internal buffer before the next message is polled, so a single read
+  still never mixes bytes from two messages, and the read order and chunk
+  boundaries of `Text`/`Binary` payloads are exactly what the old code produced.
+- Errors keep their diagnostic context: `WsError::Io` is still unwrapped to the
+  original `io::Error`, all other errors are passed through as
+  `io::ErrorKind::Other` wrapping the original `WsError`, and an error does not
+  latch the reader into the closed state.
+- Coverage that did not exist before (new file `tests/byte_reader.rs`, each
+  case individually addressable): control frames under the default policy
+  (`default_policy_hides_control_frames`), the `Binary`/`All` policies
+  (`binary_policy_skips_text_and_control`, `all_policy_keeps_control_payloads`),
+  policy switching (`set_policy_takes_effect_for_unread_messages`), stable EOF
+  (`close_frame_yields_stable_eof`), chunk integrity
+  (`chunked_reads_never_mix_messages`), empty payloads
+  (`empty_messages_are_not_eof`), 0-length read buffers
+  (`zero_len_read_buffer_consumes_nothing`), split vs. unsplit equivalence over
+  a real in-memory connection (`split_and_unsplit_read_identically`) and
+  futures-io/tokio parity (`tokio_read_matches_futures_io`, gated on the
+  `tokio-runtime` feature). Tests use in-memory channels and loopback TCP with
+  ephemeral ports only: no sleeps, no external network, no fixture files.
+- Adjacent semantics protected against regressions: `ByteWriter` and the
+  `Sender` trait are unchanged; `ByteReader::new()` keeps the old signature;
+  the default policy preserves the old payload order and per-message read
+  boundaries for `Text`/`Binary` data; `WebSocketStream`/`WebSocketReceiver`
+  are untouched, which the existing `communication`/`split_communication`
+  tests continue to verify.
+
+### Most dangerous counterexample and its regression test
+- The most dangerous counterexample for async WebSocket byte reads is the
+  *EOF flip-flop after `Close`*: a peer sends `Close` and then (or a queued
+  `Ping` is still sitting in front of it) more frames arrive. A naive reader
+  returns EOF for the `Close`, then comes back to life and returns payload
+  again on the next poll. This violates the `AsyncRead` contract, corrupts
+  `read_to_end`/`copy` loops that treat the first 0-byte read as final, and
+  breaks backpressure reasoning because the reader keeps polling a stream the
+  caller already considers finished. The regression test is
+  `close_frame_yields_stable_eof` (enqueue `Close`, then enqueue more data,
+  assert every further poll returns 0 bytes), backed up end-to-end by
+  `split_and_unsplit_read_identically`, where `read_all` asserts stable EOF on
+  a real connection for both the split receiver and the unsplit stream.
+
 ## [0.35.0] - 2026-07-28
 ### Fixed
 - Fix docs.rs build.

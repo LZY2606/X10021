@@ -113,6 +113,7 @@ pub mod tokio;
 pub mod bytes;
 pub use bytes::ByteReader;
 pub use bytes::ByteWriter;
+pub use bytes::FramePolicy;
 
 use tungstenite::protocol::CloseFrame;
 
