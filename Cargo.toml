@@ -1,0 +1,224 @@
+[package]
+name = "async-tungstenite"
+description = "Async binding for Tungstenite, the Lightweight stream-based WebSocket implementation"
+categories = ["web-programming::websocket", "network-programming", "asynchronous", "concurrency"]
+keywords = ["websocket", "io", "web", "tokio", "async-std"]
+authors = ["Sebastian Dröge <sebastian@centricular.com>"]
+license = "MIT"
+homepage = "https://github.com/sdroege/async-tungstenite"
+repository = "https://github.com/sdroege/async-tungstenite"
+documentation = "https://docs.rs/async-tungstenite"
+version = "0.35.0"
+edition = "2018"
+readme = "README.md"
+include = ["examples/**/*", "src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+rust-version = "1.85"
+
+[features]
+default = ["handshake", "futures-03-sink"]
+futures-03-sink = ["futures-util"]
+handshake = ["tungstenite/handshake"]
+async-std-runtime = ["async-std", "handshake"]
+smol-runtime = ["async-net", "handshake"]
+smol-native-tls = ["real-async-native-tls", "tungstenite/native-tls"]
+futures-rustls-manual-roots = ["__futures-rustls"]
+futures-rustls-webpki-roots = ["__futures-rustls", "webpki-roots"]
+futures-rustls-native-certs = ["__futures-rustls", "rustls-native-certs"]
+futures-rustls-platform-verifier = ["__futures-rustls", "rustls-platform-verifier"]
+tokio-runtime = ["tokio", "handshake"]
+gio-runtime = ["gio", "glib", "handshake"]
+async-tls = ["real-async-tls", "handshake"]
+async-native-tls = ["async-std-runtime", "real-async-native-tls", "tungstenite/native-tls"]
+tokio-native-tls = ["tokio-runtime", "real-tokio-native-tls", "real-native-tls", "tungstenite/native-tls"]
+tokio-rustls-manual-roots = ["__tokio-rustls"]
+tokio-rustls-webpki-roots = ["__tokio-rustls", "webpki-roots"]
+tokio-rustls-native-certs = ["__tokio-rustls", "rustls-native-certs"]
+tokio-rustls-platform-verifier = ["__tokio-rustls", "rustls-platform-verifier"]
+tokio-openssl = ["tokio-runtime", "real-tokio-openssl", "openssl"]
+verbose-logging = []
+url = ["tungstenite/url"]
+
+# rustls x tokio
+__tokio-rustls = ["__rustls-tls", "tokio-runtime", "real-tokio-rustls"]
+# rustls x futures-io
+__futures-rustls = ["__rustls-tls", "real-futures-rustls"]
+# base rustls features
+__rustls-tls = ["tungstenite/__rustls-tls", "rustls-pki-types"]
+
+[package.metadata.docs.rs]
+features = ["async-std-runtime", "smol-runtime", "tokio-runtime", "gio-runtime", "async-tls", "async-native-tls", "tokio-native-tls", "smol-native-tls"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+log = "0.4"
+futures-core = { version = "0.3", default-features = false }
+futures-task = { version = "0.3.31", default-features = false, features = ["alloc"] }
+atomic-waker = { version = "1.1", default-features = false }
+futures-io = { version = "0.3", default-features = false, features = ["std"] }
+pin-project-lite = "0.2"
+
+[dependencies.futures-util]
+optional = true
+version = "0.3"
+default-features = false
+features = ["sink"]
+
+[dependencies.tungstenite]
+version = "0.30"
+default-features = false
+
+[dependencies.async-std]
+optional = true
+version = "1.0"
+
+[dependencies.async-net]
+optional = true
+version = "2.0"
+
+[dependencies.real-tokio-openssl]
+optional = true
+version = "0.6"
+package = "tokio-openssl"
+
+[dependencies.openssl]
+optional = true
+version = "0.10"
+
+[dependencies.real-async-tls]
+optional = true
+version = "0.13"
+package = "async-tls"
+default-features = false
+features = ["client"]
+
+[dependencies.real-async-native-tls]
+optional = true
+version = "0.6.0"
+package = "async-native-tls"
+
+[dependencies.real-native-tls]
+optional = true
+version = "0.2"
+package = "native-tls"
+
+[dependencies.real-futures-rustls]
+optional = true
+version = "0.26.0"
+package = "futures-rustls"
+default-features = false
+
+[dependencies.tokio]
+optional = true
+version = "1.0"
+features = ["net"]
+default-features = false
+
+[dependencies.real-tokio-native-tls]
+optional = true
+version = "0.3"
+package = "tokio-native-tls"
+
+[dependencies.real-tokio-rustls]
+optional = true
+version = "0.26"
+package = "tokio-rustls"
+default-features = false
+
+[dependencies.rustls-pki-types]
+optional = true
+version = "1.0.1"
+
+[dependencies.rustls-native-certs]
+optional = true
+version = "0.8"
+
+[dependencies.rustls-platform-verifier]
+optional = true
+version = "0.7"
+
+[dependencies.webpki-roots]
+optional = true
+version = "1.0"
+
+[dependencies.gio]
+optional = true
+version = "0.22"
+
+[dependencies.glib]
+optional = true
+version = "0.22"
+
+[dev-dependencies]
+futures = "0.3"
+url = "2.0.0"
+env_logger = ">= 0.10, <= 0.11"
+smol = "2.0"
+tokio = { version = "1.0", features = ["full"] }
+futures-channel = "0.3"
+hyper = { version = "1.0", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+
+[dev-dependencies.tungstenite]
+version = "0.30"
+features = ["url"]
+
+[[example]]
+name = "autobahn-client"
+required-features = ["smol-runtime"]
+
+[[example]]
+name = "async-std-echo"
+required-features = ["async-std-runtime"]
+
+[[example]]
+name = "smol-echo"
+required-features = ["smol-runtime"]
+
+[[example]]
+name = "client"
+required-features = ["smol-runtime"]
+
+[[example]]
+name = "client-bytes"
+required-features = ["smol-runtime"]
+
+[[example]]
+name = "autobahn-server"
+required-features = ["smol-runtime", "futures-03-sink"]
+
+[[example]]
+name = "server"
+required-features = ["smol-runtime"]
+
+[[example]]
+name = "echo-server"
+required-features = ["smol-runtime"]
+
+[[example]]
+name = "server-headers"
+required-features = ["smol-runtime", "handshake", "futures-util"]
+
+[[example]]
+name = "interval-server"
+required-features = ["smol-runtime"]
+
+[[example]]
+name = "gio-echo"
+required-features = ["gio-runtime"]
+
+[[example]]
+name = "gio-echo-server"
+required-features = ["gio-runtime"]
+
+[[example]]
+name = "tokio-client-bytes"
+required-features = ["tokio-runtime"]
+
+[[example]]
+name = "tokio-echo"
+required-features = ["tokio-runtime"]
+
+[[example]]
+name = "server-custom-accept"
+required-features = ["tokio-runtime", "futures-util"]

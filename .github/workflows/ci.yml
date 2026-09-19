@@ -1,0 +1,167 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  style:
+    name: Check style
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: hecrj/setup-rust-action@v1
+        with:
+          components: rustfmt
+
+      - run: cargo fmt -- --check
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: ${{ matrix.rust }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install libssl-dev libglib2.0-dev
+
+      - name: Check default-features
+        run: cargo check
+
+      - name: Check no default-features
+        run: cargo check --no-default-features
+
+      - name: Check async-tls
+        run: cargo check --features async-tls
+
+      - name: Check async-std-runtime, async-tls
+        run: cargo check --features async-std-runtime,async-tls
+
+      - name: Check async-std-runtime, async-native-tls
+        run: cargo check --features async-std-runtime,async-native-tls
+
+      - name: Check async-std-runtime, async-tls, async-native-tls
+        run: cargo check --features async-std-runtime,async-tls,async-native-tls
+
+      - name: Check smol-runtime, no tls
+        run: cargo check --features smol-runtime
+
+      - name: Check smol-runtime, native-tls
+        run: cargo check --features smol-runtime,smol-native-tls
+
+      - name: Check smol-runtime, futures-rustls-native-certs
+        run: cargo check --features smol-runtime,futures-rustls-native-certs
+
+      - name: Check smol-runtime, futures-rustls-platform-verifier
+        run: cargo check --features smol-runtime,futures-rustls-platform-verifier
+
+      - name: Check smol-runtime, futures-rustls-webpki-roots
+        run: cargo check --features smol-runtime,futures-rustls-webpki-roots
+
+      - name: Check smol-runtime, futures-rustls-manual-roots
+        run: cargo check --features smol-runtime,futures-rustls-manual-roots
+
+      - name: Check tokio-runtime, tokio-native-tls
+        run: cargo check --features tokio-runtime,tokio-native-tls
+
+      - name: Check tokio-runtime, tokio-rustls-native-certs
+        run: cargo check --features tokio-runtime,tokio-rustls-native-certs
+
+      - name: Check tokio-runtime, tokio-rustls-platform-verifier
+        run: cargo check --features tokio-runtime,tokio-rustls-platform-verifier
+
+      - name: Check tokio-runtime, tokio-rustls-webpki-roots
+        run: cargo check --features tokio-runtime,tokio-rustls-webpki-roots
+
+      - name: Check tokio-runtime, tokio-rustls-manual-roots
+        run: cargo check --features tokio-runtime,tokio-rustls-manual-roots
+
+      - name: Check tokio-runtime, tokio-openssl
+        run: cargo check --features tokio-runtime,tokio-openssl
+
+      - name: Check tokio-runtime, async-tls, tokio-native-tls
+        run: cargo check --features tokio-runtime,async-tls,tokio-native-tls
+
+      - name: Check gio-runtime
+        run: cargo check --features gio-runtime
+
+      - name: Check gio-runtime, async-tls
+        run: cargo check --features gio-runtime,async-tls
+
+      - name: Check all features
+        run: cargo check --all-features
+
+      - name: Test async-std-runtime
+        run: cargo test --features async-std-runtime
+
+  test-msrv:
+    name: Test MSRV
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rust:
+          - 1.85.0
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: ${{ matrix.rust }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install libssl-dev
+
+      - name: Use MSRV Cargo.lock
+        run: cp Cargo.lock.msrv Cargo.lock
+
+      - name: Check
+        run: cargo check
+
+  autobahn:
+    name: Autobahn tests
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: ${{ matrix.rust }}
+
+      - name: Running Autobahn TestSuite for client
+        run: ./scripts/autobahn-client.sh
+
+      - name: Running Autobahn TestSuite for server
+        run: ./scripts/autobahn-server.sh
