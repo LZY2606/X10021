@@ -2,6 +2,7 @@
 //! a [`WebSocketStream`](crate::WebSocketStream) or a [`WebSocketSender`](crate::WebSocketSender).
 
 use std::{
+    collections::VecDeque,
     fmt, io,
     pin::Pin,
     task::{Context, Poll},
@@ -188,58 +189,151 @@ where
     }
 }
 
+/// Policy that determines which websocket frames a [`ByteReader`] projects into
+/// the byte stream.
+///
+/// Independent of the policy, a `Close` frame always ends the byte stream: once
+/// it is observed, the current and all subsequent reads return EOF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FramePolicy {
+    /// Only binary messages are projected into the byte stream.
+    ///
+    /// Text messages and control frames (`Ping`, `Pong`, `Close`) are skipped.
+    BinaryOnly,
+    /// Text and binary messages are projected into the byte stream.
+    ///
+    /// Control frames (`Ping`, `Pong`, `Close`) are skipped and never leak into
+    /// the payload. This is the default.
+    #[default]
+    TextAndBinary,
+    /// Like [`TextAndBinary`](Self::TextAndBinary), but control frames (`Ping`,
+    /// `Pong`, `Close`) are retained as events that can be retrieved in order
+    /// with [`ByteReader::next_control_frame`].
+    RetainControlFrames,
+}
+
 /// Treat a websocket [stream](Stream) as an `AsyncRead` implementation.
 ///
 /// This also works with any other `Stream` of `Message`, such as a `SplitStream`.
 ///
 /// Each read will only return data from one message. If you want to combine data from multiple
 /// messages into one read, consider wrapping this in a `BufReader`.
+///
+/// Which frames are projected into the byte stream is controlled by the
+/// [`FramePolicy`]. By default only text and binary messages contribute payload
+/// bytes, and a `Close` frame (or the end of the underlying stream) makes all
+/// subsequent reads return EOF.
 #[derive(Debug)]
 pub struct ByteReader<S> {
     stream: S,
     bytes: Option<Bytes>,
+    policy: FramePolicy,
+    control_frames: VecDeque<Message>,
+    closed: bool,
 }
 
 impl<S> ByteReader<S> {
     /// Create a new `ByteReader` from a [stream](Stream) that returns a WebSocket [`Message`].
+    ///
+    /// This uses the default [`FramePolicy`]. See
+    /// [`with_frame_policy`](Self::with_frame_policy) to select a different one.
     #[inline(always)]
     pub fn new(stream: S) -> Self {
+        Self::with_frame_policy(stream, FramePolicy::default())
+    }
+
+    /// Create a new `ByteReader` from a [stream](Stream) that returns a WebSocket
+    /// [`Message`], using the given [`FramePolicy`].
+    #[inline(always)]
+    pub fn with_frame_policy(stream: S, policy: FramePolicy) -> Self {
         Self {
             stream,
             bytes: None,
+            policy,
+            control_frames: VecDeque::new(),
+            closed: false,
+        }
+    }
+
+    /// Returns the [`FramePolicy`] used by this reader.
+    #[inline(always)]
+    pub fn frame_policy(&self) -> FramePolicy {
+        self.policy
+    }
+
+    /// Returns the next retained control frame (`Ping`, `Pong` or `Close`), in
+    /// the order the frames were received.
+    ///
+    /// Control frames are only retained when the reader was created with
+    /// [`FramePolicy::RetainControlFrames`], otherwise this always returns
+    /// `None`.
+    #[inline(always)]
+    pub fn next_control_frame(&mut self) -> Option<Message> {
+        self.control_frames.pop_front()
+    }
+
+    /// Get the underlying [stream](Stream) back.
+    ///
+    /// Any partially read message and any retained control frames are discarded.
+    #[inline(always)]
+    pub fn into_inner(self) -> S {
+        self.stream
+    }
+
+    fn retain_control_frame(&mut self, msg: Message) {
+        if self.policy == FramePolicy::RetainControlFrames {
+            self.control_frames.push_back(msg);
         }
     }
 }
 
 fn poll_read_helper<S>(
-    mut s: Pin<&mut ByteReader<S>>,
+    s: Pin<&mut ByteReader<S>>,
     cx: &mut Context<'_>,
     buf_len: usize,
 ) -> Poll<io::Result<Option<Bytes>>>
 where
     S: Stream<Item = Result<Message, WsError>> + Unpin,
 {
-    Poll::Ready(Ok(Some(match s.bytes {
-        None => match Pin::new(&mut s.stream).poll_next(cx) {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(None) => return Poll::Ready(Ok(None)),
-            Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(convert_err(e))),
-            Poll::Ready(Some(Ok(msg))) => {
-                let bytes = msg.into_data();
-                if bytes.len() > buf_len {
-                    s.bytes.insert(bytes).split_to(buf_len)
-                } else {
-                    bytes
-                }
-            }
-        },
-        Some(ref mut bytes) if bytes.len() > buf_len => bytes.split_to(buf_len),
-        Some(ref mut bytes) => {
-            let bytes = bytes.clone();
-            s.bytes = None;
-            bytes
+    let me = s.get_mut();
+
+    loop {
+        // Always drain the remainder of the current message first so that data
+        // from different messages is never mixed into a single read.
+        if let Some(bytes) = me.bytes.take() {
+            return Poll::Ready(Ok(Some(if bytes.len() > buf_len {
+                me.bytes.insert(bytes).split_to(buf_len)
+            } else {
+                bytes
+            })));
         }
-    })))
+
+        // Stable EOF: once the underlying stream ended or a `Close` frame was
+        // observed, all subsequent polls return EOF without polling the
+        // underlying stream again (which might never wake up again).
+        if me.closed {
+            return Poll::Ready(Ok(None));
+        }
+
+        match Pin::new(&mut me.stream).poll_next(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(None) => me.closed = true,
+            Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(convert_err(e))),
+            Poll::Ready(Some(Ok(msg))) => match msg {
+                Message::Binary(_) => me.bytes = Some(msg.into_data()),
+                Message::Text(_) if me.policy != FramePolicy::BinaryOnly => {
+                    me.bytes = Some(msg.into_data())
+                }
+                Message::Close(_) => {
+                    me.retain_control_frame(msg);
+                    me.closed = true;
+                }
+                // `Ping`, `Pong` and raw `Frame` messages are control events,
+                // not payload.
+                _ => me.retain_control_frame(msg),
+            },
+        }
+    }
 }
 
 impl<S> futures_io::AsyncRead for ByteReader<S>

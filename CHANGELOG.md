@@ -4,6 +4,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- New `FramePolicy` for `ByteReader` (`BinaryOnly`, `TextAndBinary`,
+  `RetainControlFrames`), selectable via `ByteReader::with_frame_policy`.
+  `ByteReader::new` keeps the previous default of projecting text and binary
+  messages into the byte stream.
+- `ByteReader::frame_policy`, `ByteReader::next_control_frame` (ordered
+  `Ping`/`Pong`/`Close` events when using `FramePolicy::RetainControlFrames`)
+  and `ByteReader::into_inner`.
+
+### Fixed
+- `ByteReader` no longer leaks `Ping`, `Pong` or `Close` payloads (e.g. the
+  close reason) into the byte stream under the default policy.
+- `ByteReader` now has stable EOF semantics: once a `Close` frame is observed
+  or the underlying stream ends, every subsequent `poll_read` returns EOF
+  without polling the underlying stream again. Previously a `Close` frame was
+  projected as payload and later polls depended on the underlying stream's
+  behaviour, which could differ between the futures-io and tokio entry points
+  or block forever.
+
+### Implementation notes
+- Frame classification lives in a single `poll_read_helper` shared by the
+  `futures-io` and tokio `AsyncRead` impls, so both entry points observe
+  identical message boundaries, chunking and EOF behaviour.
+- The remainder of a partially read message is always drained before the next
+  message is polled, so segmented reads of a large message never mix data
+  across messages; control frames arriving between chunks are classified by
+  the policy but never injected into the payload.
+- Errors keep their diagnostic context: `tungstenite::Error::Io` is passed
+  through unchanged and all other errors are wrapped as
+  `io::ErrorKind::Other` with the original error retained as the source.
+- Adjacent semantics protected against regression: `ByteWriter` and the
+  `Sender`/`SealedSender` traits are untouched, `ByteReader::new` keeps its
+  old signature and default text+binary projection, empty messages and
+  zero-length read buffers behave as before, and error polls do not change
+  reader state.
+- Previously uncovered gaps now tested (`tests/byte_reader.rs`): control
+  frames leaking into payload, EOF stability after `Close`, message mixing
+  under segmented reads, error context preservation, and split vs. unsplit
+  equivalence over a real loopback connection.
+
+### Most dangerous counterexample and its regression test
+The most dangerous counterexample for async websocket reads with a frame
+policy is a `Close` frame followed by an underlying stream that never wakes
+again (backpressure): if the reader polls the stream after `Close` instead of
+returning EOF, the caller hangs forever; if it instead re-yields buffered or
+trailing data, the byte stream is silently corrupted. The same corruption
+appears when a `Ping` arrives while a large binary message is being read in
+small chunks and its payload is injected mid-message. These are covered by
+the regression tests `close_eof_is_stable_even_if_stream_would_block`,
+`close_gives_stable_eof_and_hides_later_messages` and
+`segmented_reads_never_mix_messages` in `tests/byte_reader.rs`, with
+`split_and_unsplit_read_identically` verifying that the split sender/receiver
+and the unsplit stream produce byte-identical results over a real connection.
+
 ## [0.35.0] - 2026-07-28
 ### Fixed
 - Fix docs.rs build.
